@@ -37,11 +37,15 @@ def add_user(user_id):
 # --- YUKLASH VA QIDIRUV LOGIKASI ---
 async def search_songs(query):
     ydl_opts = {
-        'format': 'bestaudio/best',
-        'default_search': 'ytsearch10', # 10 ta natija qidiradi
-        'noplaylist': True,
-        'quiet': True,
-    }
+    'format': 'bestaudio/best',
+    'default_search': 'ytsearch10',
+    'noplaylist': True,
+    'quiet': True,
+    'nocheckcertificate': True, # Qo'shing
+    'geo_bypass': True,          # Qo'shing
+    'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' # Qo'shing
+}
+
     with YoutubeDL(ydl_opts) as ydl:
         info = await asyncio.to_thread(ydl.extract_info, query, download=False)
         return info['entries']
