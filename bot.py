@@ -5,129 +5,148 @@ import sqlite3
 from datetime import datetime
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
-from aiogram.types import FSInputFile, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import FSInputFile, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from yt_dlp import YoutubeDL
 from shazamio import Shazam
 
 # --- KONFIGURATSIYA ---
-TOKEN = "8673913427:AAEKG283CJzFZxkVad53sLlyzrBnvpN9pxQ"
-ADMIN_ID = 7089893378  # O'zingizning Telegram ID'ingizni yozing
-CHANNELS = ["@eduflow_news"] # Majburiy obuna (ixtiyoriy)
+TOKEN = "8673913427:AAEKG283CJzFZxkVad53sLlyzrBnvpN9pxQ" 
+ADMIN_ID = 7089893378 # O'zingizning ID raqamingiz
+CHANNELS = ["@eduflow_news"] # Obuna uchun (ixtiyoriy)
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 shazam = Shazam()
 
-# --- MA'LUMOTLAR BAZASI (SQLite) ---
+# --- BAZA BILAN ISHLASH ---
 def init_db():
     conn = sqlite3.connect('users.db')
-    cursor = conn.cursor()
-    cursor.execute('''CREATE TABLE IF NOT EXISTS users 
+    conn.cursor().execute('''CREATE TABLE IF NOT EXISTS users 
                       (user_id INTEGER PRIMARY KEY, join_date TEXT)''')
     conn.commit()
     conn.close()
 
 def add_user(user_id):
     conn = sqlite3.connect('users.db')
-    cursor = conn.cursor()
-    cursor.execute("INSERT OR IGNORE INTO users (user_id, join_date) VALUES (?, ?)", 
-                   (user_id, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+    conn.cursor().execute("INSERT OR IGNORE INTO users VALUES (?, ?)", 
+                         (user_id, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
     conn.commit()
     conn.close()
 
-def get_all_users():
-    conn = sqlite3.connect('users.db')
-    cursor = conn.cursor()
-    cursor.execute("SELECT user_id FROM users")
-    users = cursor.fetchall()
-    conn.close()
-    return [u[0] for u in users]
-
-# --- YUKLASH FUNKSIYASI ---
-async def download_media(url):
-    output_dir = 'downloads'
-    if not os.path.exists(output_dir): os.makedirs(output_dir)
+# --- YUKLASH VA QIDIRUV LOGIKASI ---
+async def search_songs(query):
     ydl_opts = {
-        'format': 'best',
-        'outtmpl': f'{output_dir}/%(title)s.%(ext)s',
+        'format': 'bestaudio/best',
+        'default_search': 'ytsearch10', # 10 ta natija qidiradi
         'noplaylist': True,
         'quiet': True,
-        'max_filesize': 50 * 1024 * 1024 # 50MB cheklov (Telegram bot limiti uchun)
     }
     with YoutubeDL(ydl_opts) as ydl:
-        info = await asyncio.to_thread(ydl.extract_info, url, download=True)
-        return ydl.prepare_filename(info)
+        info = await asyncio.to_thread(ydl.extract_info, query, download=False)
+        return info['entries']
 
-# --- ADMIN PANEL UCHUN FILTR ---
-class AdminFilter:
-    def __init__(self, admin_id):
-        self.admin_id = admin_id
-    def __call__(self, message: types.Message):
-        return message.from_user.id == self.admin_id
-
-# --- HANDLERS ---
+# --- START KOMANDASI (Chiroyli Salomlashish) ---
 @dp.message(Command("start"))
 async def start(message: types.Message):
     add_user(message.from_user.id)
-    await message.answer(f"Salom {message.from_user.first_name}!\n\nLink yuboring yoki musiqa qidirish uchun ovozli xabar tashlang.")
+    welcome_text = (
+        f"🌟 **Assalomu alaykum, {message.from_user.first_name}!**\n\n"
+        "Siz eng universal musiqa va video yuklovchi botga kirdingiz.\n\n"
+        "✨ **Nimalar qila olaman?**\n"
+        "🔍 **Musiqa qidirish:** Shunchaki nomi yoki ijrochisini yozing.\n"
+        "🎼 **Musiqa topish:** Ovozli xabar yuborsangiz, darrov taniyman.\n"
+        "📹 **Video yuklash:** Instagram/YouTube linkini yuboring.\n\n"
+        "🚀 *Marhamat, boshlaymiz!*"
+    )
+    await message.answer(welcome_text, parse_mode="Markdown")
 
-# --- ADMIN PANEL ---
-@dp.message(Command("admin"), AdminFilter(ADMIN_ID))
-async def admin_panel(message: types.Message):
-    users_count = len(get_all_users())
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📢 Reklama yuborish", callback_data="send_ad")],
-        [InlineKeyboardButton(text="📊 Statistika", callback_data="stats")]
-    ])
-    await message.answer(f"💻 **Admin Panel**\n\nJami foydalanuvchilar: {users_count}", reply_markup=kb)
-
-@dp.callback_query(F.data == "stats", AdminFilter(ADMIN_ID))
-async def show_stats(call: types.CallbackQuery):
-    users_count = len(get_all_users())
-    await call.answer(f"Jami foydalanuvchilar: {users_count}", show_alert=True)
-
-@dp.callback_query(F.data == "send_ad", AdminFilter(ADMIN_ID))
-async def start_ad(call: types.CallbackQuery):
-    await call.message.answer("Reklama xabarini yuboring (Text, rasm yoki video).")
-    # Bu yerda oddiy xabar kutish logikasi bo'ladi
-
-# --- ASOSIY ISHCHI QISM (MEDIA) ---
-@dp.message(F.text.contains("http"))
-async def handle_links(message: types.Message):
-    wait = await message.answer("⏳ Ishlanmoqda...")
+# --- MATNLI QIDIRUV (10 ta natija) ---
+@dp.message(F.text & ~F.text.startswith("/") & ~F.text.contains("http"))
+async def music_search(message: types.Message):
+    wait = await message.answer("🔍 **Siz uchun eng yaxshi variantlarni qidiryapman...**")
     try:
-        file_path = await download_media(message.text)
-        if os.path.exists(file_path):
-            await message.answer_document(FSInputFile(file_path), caption="✅ @SizningBotNomingiz")
-            os.remove(file_path)
-    except Exception as e:
-        await message.answer("❌ Xatolik: Media yuklab bo'lmadi.")
-    finally:
-        await wait.delete()
+        results = await search_songs(message.text)
+        if not results:
+            await wait.edit_text("😔 Afsuski, hech narsa topilmadi.")
+            return
 
-@dp.message(F.voice | F.audio)
-async def handle_shazam(message: types.Message):
-    wait = await message.answer("🔍 Qidirilmoqda...")
-    file_id = message.voice.file_id if message.voice else message.audio.file_id
-    file = await bot.get_file(file_id)
-    file_on_disk = f"downloads/{file_id}.ogg"
-    await bot.download_file(file.file_path, file_on_disk)
+        keyboard = []
+        text = "🎵 **Topilgan natijalar:**\n\n"
+        
+        for i, entry in enumerate(results, 1):
+            title = entry.get('title')[:40] # Tugmaga sig'ishi uchun qisqartiramiz
+            url = entry.get('webpage_url')
+            text += f"{i}. 🎹 {title}\n"
+            keyboard.append([InlineKeyboardButton(text=f"{i} - yuklash 📥", callback_data=f"dl_{entry['id']}")])
+        
+        kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
+        await wait.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+    except Exception as e:
+        await wait.edit_text("❌ Xatolik yuz berdi. Iltimos, qaytadan urinib ko'ring.")
+
+# --- TUGMA BOSILGANDA YUKLASH ---
+@dp.callback_query(F.data.startswith("dl_"))
+async def download_callback(call: CallbackQuery):
+    video_id = call.data.replace("dl_", "")
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    await call.message.edit_text("⚡️ **Yuklanmoqda...**")
     
     try:
-        out = await shazam.recognize_song(file_on_disk)
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'outtmpl': f'downloads/%(id)s.%(ext)s',
+            'noplaylist': True,
+        }
+        with YoutubeDL(ydl_opts) as ydl:
+            info = await asyncio.to_thread(ydl.extract_info, url, download=True)
+            path = ydl.prepare_filename(info)
+            
+            audio = FSInputFile(path)
+            await bot.send_audio(call.message.chat.id, audio, caption="✅ @SizningBotNomingiz orqali yuklandi")
+            os.remove(path)
+            await call.message.delete()
+    except:
+        await call.message.answer("❌ Yuklashda xatolik!")
+
+# --- OVOZLI XABARDAN TOPISH (SHAZAM) ---
+@dp.message(F.voice | F.audio)
+async def shazam_find(message: types.Message):
+    wait = await message.answer("🎧 **Eshityapman... bir oz kuting...**")
+    file_id = message.voice.file_id if message.voice else message.audio.file_id
+    file = await bot.get_file(file_id)
+    path = f"downloads/{file_id}.ogg"
+    await bot.download_file(file.file_path, path)
+    
+    try:
+        out = await shazam.recognize_song(path)
         if out.get('track'):
             t = out['track']
-            await message.answer(f"🎵 Topildi!\n\nNomi: {t.get('title')}\nIjrochi: {t.get('subtitle')}")
+            text = f"🎵 **Topildi!**\n\n📌 **Nomi:** {t.get('title')}\n👤 **Ijrochi:** {t.get('subtitle')}"
+            await message.answer(text, parse_mode="Markdown")
         else:
-            await message.answer("😔 Musiqa topilmadi.")
+            await message.answer("😔 Kechirasiz, bu musiqani taniy olmadim.")
     finally:
-        if os.path.exists(file_on_disk): os.remove(file_on_disk)
+        if os.path.exists(path): os.remove(path)
         await wait.delete()
 
+# --- ADMIN PANEL ---
+@dp.message(Command("admin"), F.from_user.id == ADMIN_ID)
+async def admin_panel(message: types.Message):
+    conn = sqlite3.connect('users.db')
+    count = conn.cursor().execute("SELECT count(*) FROM users").fetchone()[0]
+    conn.close()
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📢 Reklama (Xabar tarqatish)", callback_data="bc")]
+    ])
+    await message.answer(f"📊 **Bot Statistikasi:**\n\n👤 Foydalanuvchilar: {count}", reply_markup=kb)
+
+# --- BOTNI ISHGA TUSHIRISH ---
 async def main():
     init_db()
     if not os.path.exists('downloads'): os.makedirs('downloads')
+    print("🚀 Bot muvaffaqiyatli ishga tushdi!")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
