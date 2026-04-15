@@ -11,8 +11,8 @@ from shazamio import Shazam
 
 # --- KONFIGURATSIYA ---
 TOKEN = "8673913427:AAEKG283CJzFZxkVad53sLlyzrBnvpN9pxQ" 
-ADMIN_ID = 7089893378 # O'zingizning Telegram ID'ingizni yozing
-CHANNELS = ["@eduflow_news"] # Majburiy obuna kanali (masalan @mening_kanalim)
+ADMIN_ID = 7089893378 # O'zingizning ID raqamingiz
+CHANNELS = ["@eduflow_news"] # Majburiy obuna kanali
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=TOKEN)
@@ -40,15 +40,19 @@ def get_all_users():
     conn.close()
     return [u[0] for u in users]
 
-# --- OBUNA TEKSHIRISH FUNKSIYASI ---
+# --- OBUNA TEKSHIRISH ---
 async def check_sub(user_id):
     for channel in CHANNELS:
-        chat_member = await bot.get_chat_member(chat_id=channel, user_id=user_id)
-        if chat_member.status == "left":
+        try:
+            chat_member = await bot.get_chat_member(chat_id=channel, user_id=user_id)
+            if chat_member.status in ["left", "kicked"]:
+                return False
+        except Exception:
+            # Agar bot kanal admini bo'lmasa yoki kanal topilmasa false qaytaradi
             return False
     return True
 
-# --- YUKLASH VA QIDIRUV LOGIKASI (Blokdan o'tish bilan) ---
+# --- YUKLASH VA QIDIRUV LOGIKASI ---
 async def search_songs(query):
     ydl_opts = {
         'format': 'bestaudio/best',
@@ -56,8 +60,8 @@ async def search_songs(query):
         'noplaylist': True,
         'quiet': True,
         'no_warnings': True,
-        'source_address': '0.0.0.0', 
-        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
+        'source_address': '0.0.0.0', # IPv6 bloklarini chetlab o'tish
+        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
     }
     with YoutubeDL(ydl_opts) as ydl:
         info = await asyncio.to_thread(ydl.extract_info, query, download=False)
@@ -68,7 +72,7 @@ async def search_songs(query):
 async def start(message: types.Message):
     add_user(message.from_user.id)
     
-    # Obuna tekshiruvi
+    # Obunani tekshirish
     if not await check_sub(message.from_user.id):
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="Kanalga a'zo bo'lish 📢", url=f"https://t.me/{CHANNELS[0].replace('@','')}")],
@@ -78,11 +82,11 @@ async def start(message: types.Message):
 
     welcome_text = (
         f"🌟 **Assalomu alaykum, {message.from_user.full_name}!**\n\n"
-        "Siz eng universal va tezkor musiqa botiga kirdingiz.\n\n"
-        "✨ **Nimalar qila olaman?**\n"
+        "Siz eng universal musiqa va video yuklovchi botga kirdingiz.\n\n"
+        "✨ **Imkoniyatlar:**\n"
         "🔍 **Musiqa qidirish:** Shunchaki nomi yoki ijrochisini yozing.\n"
-        "🎼 **Musiqa topish:** Ovozli xabar yuborsangiz, darrov taniyman.\n"
-        "📹 **Video/Musiqa yuklash:** Link yuborsangiz ham bo'ladi.\n\n"
+        "🎼 **Musiqa topish:** Ovozli xabar yuborsangiz, taniy olaman.\n"
+        "📹 **Video yuklash:** YouTube linkini yuboring.\n\n"
         "🚀 *Marhamat, biron bir qo'shiq nomini yozing!*"
     )
     await message.answer(welcome_text, parse_mode="Markdown")
@@ -96,13 +100,13 @@ async def verify_sub(call: CallbackQuery):
     else:
         await call.answer("❌ Siz hali kanalga a'zo emassiz!", show_alert=True)
 
-# --- MATNLI QIDIRUV (10 ta natija + chiroyli tugmalar) ---
+# --- MATNLI QIDIRUV (10 ta natija) ---
 @dp.message(F.text & ~F.text.startswith("/") & ~F.text.contains("http"))
 async def music_search(message: types.Message):
     if not await check_sub(message.from_user.id):
         return await start(message)
 
-    wait = await message.answer("🔍 **Siz uchun eng yaxshi 10 ta variantni qidiryapman...**")
+    wait = await message.answer("🔍 **Siz uchun eng yaxshi variantlarni qidiryapman...**")
     try:
         results = await search_songs(message.text)
         if not results:
@@ -121,14 +125,14 @@ async def music_search(message: types.Message):
         await wait.edit_text(text, reply_markup=kb, parse_mode="Markdown")
     except Exception as e:
         logging.error(e)
-        await wait.edit_text("❌ Xatolik yuz berdi. Iltimos, YouTube blokini chetlab o'tishimiz uchun birozdan so'ng urinib ko'ring.")
+        await wait.edit_text("❌ Xatolik yuz berdi. Iltimos birozdan so'ng urinib ko'ring.")
 
 # --- YUKLASH HANDLER ---
 @dp.callback_query(F.data.startswith("dl_"))
 async def download_callback(call: CallbackQuery):
     video_id = call.data.replace("dl_", "")
     url = f"https://www.youtube.com/watch?v={video_id}"
-    await call.message.edit_text("⚡️ **Musiqa tayyorlanmoqda, kuting...**")
+    await call.message.edit_text("⚡️ **Musiqa tayyorlanmoqda...**")
     
     if not os.path.exists('downloads'): os.makedirs('downloads')
 
@@ -136,13 +140,13 @@ async def download_callback(call: CallbackQuery):
         ydl_opts = {
             'format': 'bestaudio/best',
             'outtmpl': 'downloads/%(id)s.%(ext)s',
-            'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
+            'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
         }
         with YoutubeDL(ydl_opts) as ydl:
             info = await asyncio.to_thread(ydl.extract_info, url, download=True)
             path = ydl.prepare_filename(info)
             audio = FSInputFile(path)
-            await bot.send_audio(call.message.chat.id, audio, caption=f"✅ {info.get('title')}\n\n📥 @SizningBotNomingiz")
+            await bot.send_audio(call.message.chat.id, audio, caption=f"✅ {info.get('title')}\n\n📥 @Bot_Username")
             if os.path.exists(path): os.remove(path)
             await call.message.delete()
     except Exception as e:
@@ -151,6 +155,9 @@ async def download_callback(call: CallbackQuery):
 # --- SHAZAM ---
 @dp.message(F.voice | F.audio)
 async def shazam_find(message: types.Message):
+    if not await check_sub(message.from_user.id):
+        return await start(message)
+    
     wait = await message.answer("🎧 **Musiqani taniyapman...**")
     file_id = message.voice.file_id if message.voice else message.audio.file_id
     file = await bot.get_file(file_id)
@@ -173,7 +180,7 @@ async def shazam_find(message: types.Message):
 @dp.message(Command("admin"), F.from_user.id == ADMIN_ID)
 async def admin_panel(message: types.Message):
     users = get_all_users()
-    await message.answer(f"📊 **Statistika:**\n\n👤 Foydalanuvchilar: {len(users)}")
+    await message.answer(f"📊 **Statistika:**\n\n👤 Foydalanuvchilar soni: {len(users)}")
 
 # --- ASOSIY ---
 async def main():
@@ -184,3 +191,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
