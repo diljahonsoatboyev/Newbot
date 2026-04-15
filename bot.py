@@ -40,17 +40,66 @@ def get_all_users():
     conn.close()
     return [u[0] for u in users]
 
-# --- OBUNA TEKSHIRISH ---
+# --- OBUNA TEKSHIRISH (Tuzatilgan) ---
 async def check_sub(user_id):
     for channel in CHANNELS:
         try:
-            chat_member = await bot.get_chat_member(chat_id=channel, user_id=user_id)
-            if chat_member.status in ["left", "kicked"]:
+            # Kanal nomini @ belgisiz ham, bilan ham tekshirish uchun formatlash
+            chat_id = channel if channel.startswith('-100') else channel
+            member = await bot.get_chat_member(chat_id=chat_id, user_id=user_id)
+            
+            # Agar status 'left' yoki 'kicked' bo'lsa, demak a'zo emas
+            if member.status in ["left", "kicked"]:
                 return False
-        except Exception:
-            # Agar bot kanal admini bo'lmasa yoki kanal topilmasa false qaytaradi
+        except Exception as e:
+            logging.error(f"Obuna tekshirishda xato: {e}")
+            # Agar xato chiqsa (masalan bot admin emas), xavfsizlik uchun False qaytaramiz
             return False
     return True
+
+# --- START KOMANDASI (Yangi Dizayn) ---
+@dp.message(Command("start"))
+async def start(message: types.Message):
+    add_user(message.from_user.id)
+    
+    if not await check_sub(message.from_user.id):
+        # Kanal havolasini chiroyli qilish
+        channel_link = f"https://t.me/{CHANNELS[0].replace('@','')}"
+        
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Obuna bo'lish 🚀", url=channel_link)],
+            [InlineKeyboardButton(text="Tasdiqlash ✅", callback_data="check_subscription")]
+        ])
+        
+        text = (
+            f"👋 **Assalomu alaykum, {message.from_user.first_name}!**\n\n"
+            "Botimizdan to'liq foydalanish va eng yangi musiqalarni yuklash uchun "
+            "quyidagi kanalimizga a'zo bo'lishingizni so'raymiz. 👇\n\n"
+            "🎁 *Bu bizning mehnatimizni qo'llab-quvvatlash uchun kichik yordam!*"
+        )
+        return await message.answer(text, reply_markup=kb, parse_mode="Markdown")
+
+    welcome_text = (
+        f"🌟 **Xush kelibsiz, {message.from_user.full_name}!**\n\n"
+        "Botingiz tayyor holatda. Musiqa nomini yozing yoki audio yuboring!"
+    )
+    await message.answer(welcome_text, parse_mode="Markdown")
+
+# --- OBUNA TASDIQLASH ---
+@dp.callback_query(F.data == "check_subscription")
+async def verify_sub(call: CallbackQuery):
+    is_sub = await check_sub(call.from_user.id)
+    if is_sub:
+        await call.message.delete()
+        await call.message.answer(
+            "🎉 **Tabriklaymiz!**\n\nSiz muvaffaqiyatli ro'yxatdan o'tdingiz. "
+            "Endi xohlagan musiqangizni qidirib yuklab olishingiz mumkin! 🔥",
+            parse_mode="Markdown"
+        )
+    else:
+        # Xabarni yangilab qo'yish
+        await call.answer("❌ Kechirasiz, hali ham kanalga a'zo emassiz!", show_alert=True)
+
 
 # --- YUKLASH VA QIDIRUV LOGIKASI ---
 async def search_songs(query):
@@ -191,4 +240,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
